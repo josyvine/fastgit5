@@ -56,67 +56,60 @@ object SyntaxHighlighter {
             return AnnotatedString("")
         }
 
-        val baseBuilder = AnnotatedString.Builder()
+        val baseBuilder = AnnotatedString.Builder(code)
         val matcher = COMBINED_PATTERN.matcher(code)
-        var lastIndex = 0
 
         while (matcher.find()) {
             val start = matcher.start()
             val end = matcher.end()
 
-            // Append unstyled text segments prior to matching index
-            if (start > lastIndex) {
-                baseBuilder.append(code.substring(lastIndex, start))
-            }
-
-            // Style matching segments based on capture group indices
+            // Style matching segments based on capture group indices directly without string copying
             when {
                 matcher.group(1) != null -> { // Comments
-                    baseBuilder.withStyle(SpanStyle(color = COMMENT_COLOR, fontFamily = FontFamily.Monospace)) {
-                        append(code.substring(start, end))
-                    }
+                    baseBuilder.addStyle(
+                        SpanStyle(color = COMMENT_COLOR, fontFamily = FontFamily.Monospace),
+                        start,
+                        end
+                    )
                 }
                 matcher.group(2) != null -> { // Strings
-                    baseBuilder.withStyle(SpanStyle(color = STRING_COLOR, fontFamily = FontFamily.Monospace)) {
-                        append(code.substring(start, end))
-                    }
+                    baseBuilder.addStyle(
+                        SpanStyle(color = STRING_COLOR, fontFamily = FontFamily.Monospace),
+                        start,
+                        end
+                    )
                 }
                 matcher.group(3) != null -> { // Keywords
-                    baseBuilder.withStyle(SpanStyle(color = KEYWORD_COLOR, fontFamily = FontFamily.Monospace)) {
-                        append(code.substring(start, end))
-                    }
+                    baseBuilder.addStyle(
+                        SpanStyle(color = KEYWORD_COLOR, fontFamily = FontFamily.Monospace),
+                        start,
+                        end
+                    )
                 }
                 matcher.group(4) != null -> { // Annotations
-                    baseBuilder.withStyle(SpanStyle(color = ANNOTATION_COLOR, fontFamily = FontFamily.Monospace)) {
-                        append(code.substring(start, end))
-                    }
+                    baseBuilder.addStyle(
+                        SpanStyle(color = ANNOTATION_COLOR, fontFamily = FontFamily.Monospace),
+                        start,
+                        end
+                    )
                 }
                 matcher.group(5) != null -> { // Numbers
-                    baseBuilder.withStyle(SpanStyle(color = NUMBER_COLOR, fontFamily = FontFamily.Monospace)) {
-                        append(code.substring(start, end))
-                    }
-                }
-                else -> {
-                    baseBuilder.append(code.substring(start, end))
+                    baseBuilder.addStyle(
+                        SpanStyle(color = NUMBER_COLOR, fontFamily = FontFamily.Monospace),
+                        start,
+                        end
+                    )
                 }
             }
-            lastIndex = end
         }
-
-        // Append remaining unstyled text segments
-        if (lastIndex < code.length) {
-            baseBuilder.append(code.substring(lastIndex))
-        }
-
-        val baseAnnotated = baseBuilder.toAnnotatedString()
 
         // If no active search query exists, return the syntax-highlighted string directly
         if (searchQuery.isEmpty()) {
-            return baseAnnotated
+            return baseBuilder.toAnnotatedString()
         }
 
         // Overlay active search match highlights across the styled text
-        val finalBuilder = AnnotatedString.Builder(baseAnnotated)
+        val finalBuilder = baseBuilder
         try {
             val searchMatcher = if (isRegex) {
                 val flags = if (isCaseSensitive) 0 else Pattern.CASE_INSENSITIVE

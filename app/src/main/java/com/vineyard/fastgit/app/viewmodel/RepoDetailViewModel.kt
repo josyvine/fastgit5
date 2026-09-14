@@ -285,7 +285,7 @@ class RepoDetailViewModel(
                         throw e
                     }
                 }
-                
+
                 if (path.isEmpty()) {
                     _treeItems.value = contents
                 } else {
@@ -393,32 +393,41 @@ class RepoDetailViewModel(
     fun openFile(fileItem: FileItem) {
         AppLogger.i("CodeEditor", "Opening file '${fileItem.path}'")
         _isLoading.value = true
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (tokenManager.isDemoMode()) {
                     val className = fileItem.name.removeSuffix(".kt")
-                    _fileContent.value = fileItem.content ?: "// Sample Code Content for ${fileItem.name}\npackage com.vineyard.fastgit.app\n\nclass $className {\n    fun init() {\n        println(\"FastGit Explorer\")\n    }\n}"
-                    AppLogger.s("CodeEditor", "Opened file in Demo Mode: ${fileItem.name}")
-                    _activeFile.value = fileItem
+                    val content = fileItem.content ?: "// Sample Code Content for ${fileItem.name}\npackage com.vineyard.fastgit.app\n\nclass $className {\n    fun init() {\n        println(\"FastGit Explorer\")\n    }\n}"
+                    withContext(Dispatchers.Main) {
+                        _fileContent.value = content
+                        _activeFile.value = fileItem
+                        _isLoading.value = false
+                        AppLogger.s("CodeEditor", "Opened file in Demo Mode: ${fileItem.name}")
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
                     val details = api.getSingleFileContent(owner, repoName, fileItem.path, _currentBranch.value)
-                    if (details.encoding == "base64" && details.content != null) {
+                    val decoded = if (details.encoding == "base64" && details.content != null) {
                         val cleanB64 = details.content.replace("\n", "").replace("\r", "")
-                        val decoded = String(Base64.decode(cleanB64, Base64.DEFAULT))
-                        _fileContent.value = decoded
+                        String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
                     } else {
-                        _fileContent.value = details.content ?: ""
+                        details.content ?: ""
                     }
-                    AppLogger.s("CodeEditor", "Successfully fetched file content for ${fileItem.path}")
-                    _activeFile.value = fileItem
+                    val updatedFileItem = fileItem.copy(sha = details.sha ?: fileItem.sha)
+                    withContext(Dispatchers.Main) {
+                        _fileContent.value = decoded
+                        _activeFile.value = updatedFileItem
+                        _isLoading.value = false
+                        AppLogger.s("CodeEditor", "Successfully fetched file content for ${fileItem.path}")
+                    }
                 }
             } catch (e: Exception) {
                 AppLogger.e("CodeEditor", "Failed to load content for ${fileItem.path}: ${e.message}", e)
-                _fileContent.value = "// Error loading file content: ${e.message}"
-                _activeFile.value = fileItem
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _fileContent.value = "// Error loading file content: ${e.message}"
+                    _activeFile.value = fileItem
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -445,17 +454,22 @@ class RepoDetailViewModel(
     }
 
     fun saveAndCommitFile(fileItem: FileItem, updatedContent: String, commitMessage: String) {
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             AppLogger.i("CodeEditor", "Committing changes to '${fileItem.path}' with message: '$commitMessage'")
             try {
                 if (tokenManager.isDemoMode()) {
-                    _fileContent.value = updatedContent
-                    _statusMessage.value = "Changes committed: '$commitMessage'"
-                    AppLogger.s("CodeEditor", "Committed file changes in Demo Mode")
+                    withContext(Dispatchers.Main) {
+                        _fileContent.value = updatedContent
+                        _statusMessage.value = "Changes committed: '$commitMessage'"
+                        _isLoading.value = false
+                        AppLogger.s("CodeEditor", "Committed file changes in Demo Mode")
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
-                    val b64Content = Base64.encodeToString(updatedContent.toByteArray(), Base64.NO_WRAP)
+                    val b64Content = Base64.encodeToString(updatedContent.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                     val req = CreateFileRequest(
                         message = commitMessage,
                         content = b64Content,
@@ -463,16 +477,20 @@ class RepoDetailViewModel(
                         branch = _currentBranch.value
                     )
                     api.createOrUpdateFile(owner, repoName, fileItem.path, req)
-                    _fileContent.value = updatedContent
-                    _statusMessage.value = "File updated and committed successfully!"
-                    AppLogger.s("CodeEditor", "Committed file '${fileItem.path}' to GitHub")
-                    loadContents(_currentPath.value)
+                    withContext(Dispatchers.Main) {
+                        _fileContent.value = updatedContent
+                        _statusMessage.value = "File updated and committed successfully!"
+                        _isLoading.value = false
+                        AppLogger.s("CodeEditor", "Committed file '${fileItem.path}' to GitHub")
+                        loadContents(_currentPath.value)
+                    }
                 }
             } catch (e: Exception) {
                 AppLogger.e("CodeEditor", "Failed to commit file '${fileItem.path}': ${e.message}", e)
-                _statusMessage.value = "Failed to commit: ${e.message}"
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _statusMessage.value = "Failed to commit: ${e.message}"
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -483,33 +501,42 @@ class RepoDetailViewModel(
 
     fun createNewFileInDirectory(dirPath: String, fileName: String, initialContent: String, commitMessage: String) {
         val fullPath = mergePaths(dirPath, fileName)
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             AppLogger.i("FileTree", "Creating new file '$fullPath'")
             try {
                 if (tokenManager.isDemoMode()) {
                     val newFile = FileItem(name = fileName, path = fullPath, type = "file", content = initialContent)
-                    _treeItems.value = _treeItems.value + newFile
-                    _statusMessage.value = "File '$fileName' created!"
-                    AppLogger.s("FileTree", "Created new file '$fullPath' in local tree")
+                    withContext(Dispatchers.Main) {
+                        _treeItems.value = _treeItems.value + newFile
+                        _statusMessage.value = "File '$fileName' created!"
+                        _isLoading.value = false
+                        AppLogger.s("FileTree", "Created new file '$fullPath' in local tree")
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
-                    val b64Content = Base64.encodeToString(initialContent.toByteArray(), Base64.NO_WRAP)
+                    val b64Content = Base64.encodeToString(initialContent.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                     val req = CreateFileRequest(
                         message = commitMessage,
                         content = b64Content,
                         branch = _currentBranch.value
                     )
                     api.createOrUpdateFile(owner, repoName, fullPath, req)
-                    _statusMessage.value = "File '$fileName' created successfully!"
-                    AppLogger.s("FileTree", "Created file '$fullPath' on GitHub branch '${_currentBranch.value}'")
-                    loadContents(_currentPath.value)
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = "File '$fileName' created successfully!"
+                        _isLoading.value = false
+                        AppLogger.s("FileTree", "Created file '$fullPath' on GitHub branch '${_currentBranch.value}'")
+                        loadContents(_currentPath.value)
+                    }
                 }
             } catch (e: Exception) {
                 AppLogger.e("FileTree", "Failed to create file '$fullPath': ${e.message}", e)
-                _statusMessage.value = "Failed to create file: ${e.message}"
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _statusMessage.value = "Failed to create file: ${e.message}"
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -682,7 +709,7 @@ class RepoDetailViewModel(
                 _isLoading.value = true
                 _statusMessage.value = "Downloading ${folderItem.name} as ZIP..."
             }
-            
+
             try {
                 val safeName = if (folderItem.name.isNotBlank() && folderItem.name != "..") folderItem.name else repoName
                 val fileName = "$safeName.zip"
@@ -735,7 +762,7 @@ class RepoDetailViewModel(
                 val bytes = zip.readBytes()
                 val savedFile = DownloadUtils.saveBinaryToDownloads(context, "", fileName, bytes)
                 zip.delete()
-                
+
                 withContext(Dispatchers.Main) {
                     if (savedFile != null) {
                         _statusMessage.value = "Folder saved successfully to: Downloads/FastGit/$fileName"
@@ -805,15 +832,20 @@ class RepoDetailViewModel(
         val item = _copiedItem.value ?: return
         val newFileName = item.name
         val destPath = if (targetPath.isBlank()) newFileName else "$targetPath/$newFileName"
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             try {
                 if (tokenManager.isDemoMode()) {
-                    _statusMessage.value = "Pasted '${item.name}' to /$destPath"
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = "Pasted '${item.name}' to /$destPath"
+                        _isLoading.value = false
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
                     val contentToPaste = if (item.content != null) {
-                        Base64.encodeToString(item.content.toByteArray(), Base64.NO_WRAP)
+                        Base64.encodeToString(item.content.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                     } else {
                         val single = api.getSingleFileContent(owner, repoName, item.path, _currentBranch.value)
                         single.content ?: ""
@@ -824,20 +856,26 @@ class RepoDetailViewModel(
                         branch = _currentBranch.value
                     )
                     api.createOrUpdateFile(owner, repoName, destPath, req)
-                    _statusMessage.value = "Pasted '${item.name}' to /$destPath"
-                    loadContents(_currentPath.value)
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = "Pasted '${item.name}' to /$destPath"
+                        _isLoading.value = false
+                        loadContents(_currentPath.value)
+                    }
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Failed to paste: ${e.message}"
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _statusMessage.value = "Failed to paste: ${e.message}"
+                    _isLoading.value = false
+                }
             }
         }
     }
 
     fun deleteItem(item: FileItem) {
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             try {
                 if (tokenManager.isDemoMode()) {
                     fun removeRecursive(list: List<FileItem>): List<FileItem> {
@@ -845,14 +883,22 @@ class RepoDetailViewModel(
                             if (it.children.isNotEmpty()) it.copy(children = removeRecursive(it.children).toMutableList()) else it
                         }
                     }
-                    _treeItems.value = removeRecursive(_treeItems.value)
-                    _statusMessage.value = "Deleted '${item.name}'"
+                    val updatedTree = removeRecursive(_treeItems.value)
+                    withContext(Dispatchers.Main) {
+                        _treeItems.value = updatedTree
+                        _statusMessage.value = "Deleted '${item.name}'"
+                        _isLoading.value = false
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
                     if (item.type == "dir") {
-                        _statusMessage.value = "Deleting folder '${item.name}'..."
+                        withContext(Dispatchers.Main) {
+                            _statusMessage.value = "Deleting folder '${item.name}'..."
+                        }
                         deleteDirectoryRecursively(api, owner, repoName, item.path, _currentBranch.value)
-                        _statusMessage.value = "Deleted folder '${item.name}' successfully!"
+                        withContext(Dispatchers.Main) {
+                            _statusMessage.value = "Deleted folder '${item.name}' successfully!"
+                        }
                     } else {
                         val sha = if (item.sha.isNotBlank()) item.sha else {
                             try {
@@ -866,19 +912,25 @@ class RepoDetailViewModel(
                             "branch" to _currentBranch.value
                         )
                         val resp = api.deleteFile(owner, repoName, item.path, body)
-                        if (resp.isSuccessful) {
-                            _statusMessage.value = "Deleted '${item.name}'"
-                        } else {
-                            _statusMessage.value = "Delete failed: ${resp.errorBody()?.string() ?: resp.message()}"
+                        withContext(Dispatchers.Main) {
+                            if (resp.isSuccessful) {
+                                _statusMessage.value = "Deleted '${item.name}'"
+                            } else {
+                                _statusMessage.value = "Delete failed: ${resp.errorBody()?.string() ?: resp.message()}"
+                            }
                         }
                     }
-                    loadContents(_currentPath.value)
+                    withContext(Dispatchers.Main) {
+                        _isLoading.value = false
+                        loadContents(_currentPath.value)
+                    }
                 }
             } catch (e: Exception) {
                 AppLogger.e("Delete", "Failed to delete ${item.path}: ${e.message}", e)
-                _statusMessage.value = "Failed to delete: ${e.message}"
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _statusMessage.value = "Failed to delete: ${e.message}"
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -919,11 +971,16 @@ class RepoDetailViewModel(
         if (newName.isBlank() || newName == item.name) return
         val parentDir = if (item.path.contains("/")) item.path.substringBeforeLast("/") else ""
         val newPath = if (parentDir.isBlank()) newName else "$parentDir/$newName"
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             try {
                 if (tokenManager.isDemoMode()) {
-                    _statusMessage.value = "Renamed '${item.name}' to '$newName'"
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = "Renamed '${item.name}' to '$newName'"
+                        _isLoading.value = false
+                    }
                 } else {
                     val api = RetrofitClient.getService(tokenManager)
                     val single = api.getSingleFileContent(owner, repoName, item.path, _currentBranch.value)
@@ -937,13 +994,17 @@ class RepoDetailViewModel(
                     api.createOrUpdateFile(owner, repoName, newPath, req)
                     val delBody = mapOf("message" to "Remove old ${item.name}", "sha" to sha, "branch" to _currentBranch.value)
                     api.deleteFile(owner, repoName, item.path, delBody)
-                    _statusMessage.value = "Renamed to '$newName'"
-                    loadContents(_currentPath.value)
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = "Renamed to '$newName'"
+                        _isLoading.value = false
+                        loadContents(_currentPath.value)
+                    }
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Failed to rename: ${e.message}"
-            } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _statusMessage.value = "Failed to rename: ${e.message}"
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -982,14 +1043,14 @@ class RepoDetailViewModel(
                 for (file in textFiles) {
                     val rawContent = file.content ?: continue
                     val text = if (file.encoding == "base64") {
-                        try { String(Base64.decode(rawContent.replace("\n", "").replace("\r", ""), Base64.DEFAULT)) } catch (e: Exception) { rawContent }
+                        try { String(Base64.decode(rawContent.replace("\n", "").replace("\r", ""), Base64.DEFAULT), Charsets.UTF_8) } catch (e: Exception) { rawContent }
                     } else rawContent
 
                     if (text.contains(searchQuery)) {
                         val count = text.split(searchQuery).size - 1
                         totalOccurrences += count
                         val updated = text.replace(searchQuery, replaceQuery)
-                        val b64 = Base64.encodeToString(updated.toByteArray(), Base64.NO_WRAP)
+                        val b64 = Base64.encodeToString(updated.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                         val req = CreateFileRequest(
                             message = "Refactor: Replace '$searchQuery' -> '$replaceQuery' in ${file.name}",
                             content = b64,
@@ -1069,7 +1130,7 @@ class RepoDetailViewModel(
                     } else if (file.content != null) {
                         try {
                             val cleanB64 = file.content.replace("\n", "").replace("\r", "")
-                            String(Base64.decode(cleanB64, Base64.DEFAULT))
+                            String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
                         } catch (e: Exception) {
                             file.content
                         }
@@ -1083,7 +1144,7 @@ class RepoDetailViewModel(
 
                     if (hasTextMatch || isInsidePackageDir) {
                         val updatedText = text.replace(oldPackage, newPackage)
-                        val b64 = Base64.encodeToString(updatedText.toByteArray(), Base64.NO_WRAP)
+                        val b64 = Base64.encodeToString(updatedText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
 
                         if (isSourceFile || isInsidePackageDir) {
                             val srcRoot = if (file.path.contains("src/main/java/")) {
@@ -1521,10 +1582,10 @@ class RepoDetailViewModel(
 
                 val api = RetrofitClient.getService(tokenManager)
                 AppLogger.i("Artifacts", "Fetching artifacts list for run ID: $runId")
-                
+
                 val response = api.getWorkflowRunArtifacts(owner, repoName, runId)
                 val artifacts = response.artifacts ?: emptyList()
-                
+
                 if (artifacts.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         _statusMessage.value = "No build artifacts found for this run."
@@ -1555,7 +1616,7 @@ class RepoDetailViewModel(
                     val downloadResponse = api.downloadArtifact(owner, repoName, artifact.id)
                     if (downloadResponse.isSuccessful && downloadResponse.body() != null) {
                         val body = downloadResponse.body()!!
-                        
+
                         val tempZipFile = File(context.cacheDir, "artifact_${artifact.id}.zip")
                         val contentLength = body.contentLength()
                         val inputStream = body.byteStream()
@@ -1717,12 +1778,12 @@ class RepoDetailViewModel(
                     val branchRef = _currentBranch.value
                     AppLogger.i("GitHubAPI", "Fetching recursive tree for branch: $branchRef")
                     val response = api.getRecursiveTree(owner, repoName, branchRef)
-                    
+
                     val matchedEntry = response.tree.find { entry ->
                         val name = entry.path.substringAfterLast('/')
                         name.contains(query, ignoreCase = true)
                     }
-                    
+
                     if (matchedEntry != null) {
                         val targetPath = if (matchedEntry.type == "tree") {
                             matchedEntry.path
@@ -1842,7 +1903,7 @@ fun buildFileTreeFromScannedFiles(scannedFiles: List<ZipUtils.ExtractedFileInfo>
         val filePath = cleanPath
         val decodedContent = try {
             val bytes = Base64.decode(file.contentBase64, Base64.DEFAULT)
-            String(bytes)
+            String(bytes, Charsets.UTF_8)
         } catch (e: Exception) {
             "// Binary content: ${file.relativePath}"
         }
